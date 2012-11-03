@@ -396,18 +396,42 @@ EOS
         File.open(bundle_pkginfo, 'w') { |io| io.write(config.pkginfo_data) }
       end
 
+      sub_bundles = []
+
       # Compile IB resources.
+      ib_resources = []
       if File.exist?(config.resources_dir)
-        ib_resources = []
-        ib_resources.concat((Dir.glob(File.join(config.resources_dir, '**', '*.xib')) + Dir.glob(File.join(config.resources_dir, '*.lproj', '*.xib'))).map { |xib| [xib, xib.sub(/\.xib$/, '.nib')] })
-        ib_resources.concat(Dir.glob(File.join(config.resources_dir, '**', '*.storyboard')).map { |storyboard| [storyboard, storyboard.sub(/\.storyboard$/, '.storyboardc')] })
+        nib_resources = Dir.glob(File.join(config.resources_dir, '**', '*.xib')) + Dir.glob(File.join(config.resources_dir, '*.lproj', '*.xib'))
+        nib_resources += Dir.glob(File.join(config.resources_dir, '**', '*.storyboard'))
+        nib_resources.map! do |xib| 
+          dest = xib.sub(/\.xib$/, '.nib')
+          dest = dest.sub(/\.storyboard$/, '.storyboardc')
+          matchdata = dest.match(/^.*\/(.*\.lproj)\/[^\/]*$/)
+          if !matchdata.nil? and !matchdata[1].nil?
+            # include lproj
+            dest = File.join bundle_path, matchdata[1], File.basename(dest)
+            if dest.end_with? '.storyboardc'
+              sub_bundles << File.join(matchdata[1], File.basename(dest))
+            end
+          else
+            # no lproj
+            dest = File.join bundle_path, File.basename(dest)
+            if dest.end_with? '.storyboardc'
+              sub_bundles << File.basename(dest) 
+            end
+          end
+          [xib, dest]
+        end
+        ib_resources.concat(nib_resources)
         ib_resources.each do |src, dest|
           if !File.exist?(dest) or File.mtime(src) > File.mtime(dest)
+            FileUtils.mkdir_p(File.dirname(dest))
             App.info 'Compile', src
             sh "/usr/bin/ibtool --compile \"#{dest}\" \"#{src}\""
           end
         end
       end
+      flattened_ib_resources = ib_resources.flatten
 
       # Compile CoreData Model resources.
       if File.exist?(config.resources_dir)
@@ -429,16 +453,29 @@ EOS
         config.name
       ]
       resources_files = []
+      flattened_resources_files = []
       if File.exist?(config.resources_dir)
         resources_files = Dir.chdir(config.resources_dir) do
           Dir.glob('**{,/*/**}/*').reject { |x| ['.xib', '.storyboard', '.xcdatamodeld', '.lproj'].include?(File.extname(x)) }
         end
         resources_files.each do |res|
           res_path = File.join(config.resources_dir, res)
+          next if File.directory?(res_path)
           if reserved_app_bundle_files.include?(res)
             App.fail "Cannot use `#{res_path}' as a resource file because it's a reserved application bundle file"
           end
-          dest_path = File.join(bundle_path, res)
+          # Check if it's in an lproj
+          matchdata = res_path.match(/^.*\/(.*\.lproj)\/[^\/]*$/)
+          if !matchdata.nil? and !matchdata[1].nil?
+            # include lproj
+            dest_path = File.join bundle_path, matchdata[1], File.basename(res)
+            flattened_resources_files << File.join(matchdata[1], File.basename(res))
+          else
+            # no lproj
+            dest_path = File.join bundle_path, File.basename(res)
+            flattened_resources_files << File.basename(res)
+          end
+          
           if !File.exist?(dest_path) or File.mtime(res_path) > File.mtime(dest_path)
             FileUtils.mkdir_p(File.dirname(dest_path))
             App.info 'Copy', res_path
@@ -453,6 +490,15 @@ EOS
           next if File.directory?(bundle_res)
           next if reserved_app_bundle_files.include?(bundle_res)
           next if resources_files.include?(bundle_res)
+          next if flattened_resources_files.include?(bundle_res)
+          next if flattened_ib_resources.include?(File.join(bundle_path, bundle_res))
+          is_sub_bundle = false
+          sub_bundles.each do |sub_bundle|
+            if bundle_res.start_with? sub_bundle
+              is_sub_bundle = true
+            end
+          end
+          next if is_sub_bundle
           App.warn "File `#{bundle_res}' found in app bundle but not in `#{config.resources_dir}', removing"
           FileUtils.rm_rf(bundle_res)
         end
