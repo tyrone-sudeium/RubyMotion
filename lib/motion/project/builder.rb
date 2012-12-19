@@ -137,6 +137,12 @@ module Motion; module Project;
         builders << [queue, th]
       end
 
+      # Resolve file dependencies
+      if config.detect_dependencies == true
+        deps = Dependency.new(config.files).run
+        config.dependencies = deps.merge(config.dependencies)
+      end
+
       # Feed builders with work.
       builder_i = 0
       config.ordered_build_files.each do |path|
@@ -622,6 +628,105 @@ PLIST
         end
       end
 =end
+    end
+  end
+
+  class Dependency
+    begin
+      require 'ripper'
+    rescue LoadError
+      $:.unshift(File.expand_path(File.join(File.dirname(__FILE__), '../../ripper18')))
+      require 'ripper'
+    end
+
+    @file_paths = []
+
+    def initialize(paths)
+      @file_paths = paths.flatten.sort
+    end
+
+    def cyclic?(dependencies, def_path, ref_path)
+      deps = dependencies[def_path]
+      if deps
+        if deps.include?(ref_path)
+          return true
+        end
+        deps.each do |file|
+          return true if cyclic?(dependencies, file, ref_path)
+        end
+      end
+
+      return false
+    end
+
+    def run
+      consts_defined  = {}
+      consts_referred = {}
+      @file_paths.each do |path|
+        parser = Constant.new(File.read(path))
+        parser.parse
+        parser.defined.each do |const|
+          consts_defined[const] = path
+        end
+        parser.referred.each do |const|
+          consts_referred[const] ||= []
+          consts_referred[const] << path
+        end
+      end
+
+      dependency = {}
+      consts_defined.each do |const, def_path|
+        if consts_referred[const]
+          consts_referred[const].each do |ref_path|
+            if def_path != ref_path
+              if cyclic?(dependency, def_path, ref_path)
+                # remove cyclic dependencies
+                next
+              end
+
+              dependency[ref_path] ||= []
+              dependency[ref_path] << def_path
+              dependency[ref_path].uniq!
+            end
+          end
+        end
+      end
+
+      return dependency
+    end
+
+    class Constant < Ripper::SexpBuilder
+      attr_accessor :defined
+      attr_accessor :referred
+
+      def initialize(source)
+        @defined  = []
+        @referred = []
+        super
+      end
+
+      def on_const_ref(args)
+        type, const_name, position = args
+        @defined << const_name
+      end
+
+      def on_var_field(args)
+        type, name, position = args
+        if type == :@const
+          @defined << name
+        end
+      end
+
+      def on_var_ref(args)
+        type, name, position = args
+        if type == :@const
+          @referred << name
+        end
+      end
+
+      def on_const_path_ref(parent, args)
+        on_var_ref(args)
+      end
     end
   end
 end; end

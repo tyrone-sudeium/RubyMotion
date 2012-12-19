@@ -52,16 +52,17 @@ module Motion; module Project
       :resources_dir, :specs_dir, :identifier, :codesign_certificate,
       :provisioning_profile, :device_family, :interface_orientations, :version,
       :short_version, :icons, :prerendered_icon, :background_modes, :seed_id,
-      :entitlements, :fonts, :status_bar_style, :motiondir
+      :entitlements, :fonts, :status_bar_style, :motiondir, :detect_dependencies
 
     # Internal only.
-    attr_accessor :build_mode, :spec_mode, :distribution_mode
+    attr_accessor :build_mode, :spec_mode, :distribution_mode, :dependencies
 
     def initialize(project_dir, build_mode)
       @project_dir = project_dir
       @files = Dir.glob(File.join(project_dir, 'app/**/*.rb'))
       @info_plist = {}
       @dependencies = {}
+      @detect_dependencies = true
       @frameworks = ['UIKit', 'Foundation', 'CoreGraphics']
       @weak_frameworks = []
       @framework_search_paths = []
